@@ -11,30 +11,31 @@ from keras.src.legacy.preprocessing.image import ImageDataGenerator
 
 import numpy as np
 import cv2
-from sklearn.neighbors import KNeighborsClassifier
 from sklearn.preprocessing import LabelEncoder
 import pickle
 import time
 import warnings
 warnings.filterwarnings("ignore", category=UserWarning)
+import tensorflow as tf
+tf.get_logger().setLevel('ERROR')
 
 from PIL import ImageGrab, ImageTk
 
 dataset_path = 'dataset'
 image_size = (28, 28)
 batch_size = 32
-epochs = 1
+epochs = 10
 
 def check_files():
     cnn_file_exists = os.path.exists('cnnmodel.pkl')
-    knn_file_exists = os.path.exists('knnmodel.pkl')
+    mlp_file_exists = os.path.exists('mlpmodel.pkl')
 
     cnn_button.config(state="normal" if cnn_file_exists else "disabled")
-    knn_button.config(state="normal" if knn_file_exists else "disabled")
+    mlp_button.config(state="normal" if mlp_file_exists else "disabled")
 
 def train_models():
     train_cnn()
-    train_knn()
+    train_mlp()
     check_files()
     messagebox.showinfo("Training", f"Models are successfully trained and saved.")
 
@@ -66,12 +67,11 @@ def train_cnn():
 
     print(f"Training complete. Time: {time.time() - start_time:.2f} seconds")
 
-    #model.save('cnnmodel.keras')
     with open('cnnmodel.pkl', 'wb') as f:
         pickle.dump(model, f)
 
-def train_knn():
-    print(f"KNN training started")
+def train_mlp():
+    print(f"MLP training started")
     start_time = time.time()
     features = []
     labels = []
@@ -79,12 +79,16 @@ def train_knn():
     for label in os.listdir(dataset_path):
         label_path = os.path.join(dataset_path, label)
         if os.path.isdir(label_path):
-            for image_name in os.listdir(label_path):
+            for i, image_name in enumerate(os.listdir(label_path)):
                 image_path = os.path.join(label_path, image_name)
 
                 image = cv2.imread(image_path, cv2.IMREAD_GRAYSCALE)
                 image = cv2.resize(image, image_size)
+
                 image = image / 255.0
+
+                assert image.shape == image_size, f"Expected image size {image_size}, got {image.shape}"
+
                 image = image.flatten()
 
                 features.append(image)
@@ -96,50 +100,50 @@ def train_knn():
     label_encoder = LabelEncoder()
     labels = label_encoder.fit_transform(labels)
 
-    knn = KNeighborsClassifier(n_neighbors=3)
-    knn.fit(features, labels)
+    model = Sequential()
+    model.add(Input(shape=(28 * 28,)))
+    model.add(Dense(128, activation='relu'))
+    model.add(Dense(10, activation='softmax'))
+
+    model.compile(optimizer='adam', loss='sparse_categorical_crossentropy', metrics=['accuracy'])
+
+    model.fit(features, labels, epochs=epochs, batch_size=batch_size, verbose=0)
+
     print(f"Training complete. Time: {time.time() - start_time:.2f} seconds")
 
-    with open('knnmodel.pkl', 'wb') as f:
-        pickle.dump(knn, f)
-
-def clear_canvas():
-    canvas.delete("all")
-    prediction_label.config(text="Prediction: ")
-    confidence_label.config(text="Confidence: ")
-    time_label.config(text="Time: ")
-    label_image.config(image='')
+    with open('mlpmodel.pkl', 'wb') as f:
+        pickle.dump(model, f)
 
 def run_model():
     x1, y1 = canvas.winfo_rootx(), canvas.winfo_rooty()
     x2, y2 = x1 + canvas.winfo_width(), y1 + canvas.winfo_height()
 
     img = ImageGrab.grab(bbox=(x1, y1, x2, y2))
-
     img = img.resize(image_size)
-
     img = img.convert('L')
 
     img_array = np.array(img)
+
     img_array = img_array / 255.0
 
-    img_array = img_array.reshape(1, 28, 28, 1)
+    assert img_array.shape == image_size, f"Expected image size {image_size}, got {img_array.shape}"
+
+    img_array = img_array.flatten().reshape(1, -1)
 
     start_time = time.time()
 
     if selected_model.get() == "CNN":
         with open('cnnmodel.pkl', 'rb') as f:
             model = pickle.load(f)
+        predictions = model.predict(img_array.reshape(1, 28, 28, 1))
+        predicted_class = np.argmax(predictions)
+        confidence = np.max(predictions)
+    elif selected_model.get() == "MLP":
+        with open('mlpmodel.pkl', 'rb') as f:
+            model = pickle.load(f)
         predictions = model.predict(img_array)
         predicted_class = np.argmax(predictions)
         confidence = np.max(predictions)
-    elif selected_model.get() == "KNN":
-        # Завантажити модель KNN
-        with open('knnmodel.pkl', 'rb') as f:
-            knn = pickle.load(f)
-        img_flat = img_array.flatten().reshape(1, -1)
-        predicted_class = knn.predict(img_flat)[0]
-        confidence = knn.predict_proba(img_flat).max()
 
     elapsed_time = time.time() - start_time
 
@@ -150,6 +154,13 @@ def run_model():
     img_tk = ImageTk.PhotoImage(img)
     label_image.config(image=img_tk)
     label_image.image = img_tk
+
+def clear_canvas():
+    canvas.delete("all")
+    prediction_label.config(text="Prediction: ")
+    confidence_label.config(text="Confidence: ")
+    time_label.config(text="Time: ")
+    label_image.config(image='')
 
 def check_run_button():
     if selected_model.get() == "None":
@@ -181,8 +192,8 @@ selected_model = tk.StringVar(value="None")
 cnn_button = tk.Radiobutton(frame_radio_train, text="CNN Model", variable=selected_model, value="CNN", bg=secondary_color, fg=main_color, cursor="hand2", command=check_run_button)
 cnn_button.pack(side="left", padx=10)
 
-knn_button = tk.Radiobutton(frame_radio_train, text="KNN Model", variable=selected_model, value="KNN", bg=secondary_color, fg=main_color, cursor="hand2", command=check_run_button)
-knn_button.pack(side="left", padx=10)
+mlp_button = tk.Radiobutton(frame_radio_train, text="MLP Model", variable=selected_model, value="MLP", bg=secondary_color, fg=main_color, cursor="hand2", command=check_run_button)
+mlp_button.pack(side="left", padx=10)
 
 train_button = tk.Button(frame_radio_train, text="Train", command=train_models, bg=secondary_color, fg=main_color, bd=0, cursor="hand2")
 train_button.pack(side="left", padx=10)
